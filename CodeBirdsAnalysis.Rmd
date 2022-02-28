@@ -1,0 +1,273 @@
+---
+title: "Birds analysis"
+author: "Sara Contu"
+date: "13 June 2019"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+bibliography: library.bib  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This analysis is aimed at studying the Birds response to human pressure. Specifically we used the PREDICTS data - abundance data of birds species at paired sites facing different level of human pressure [@Hudson2014] - in combination to the species traits data, accounting for phylogenitic signal.   
+
+
+# Load librairies
+
+```{r message=FALSE, warning=FALSE}
+library("dplyr")
+library("RColorBrewer")
+library("ggpubr")
+library("arm")
+source("../../Functions/SSI_calc.R")
+source("../../Functions/plot_dotchart.R")
+```
+
+# Preparing the data 
+
+Downloaded the diversity data from the PREDICTS database (diversity-2018-03-28-02-36-24.rds). This will include all the diversity data availalble on the database, but I need to subset to include only birds, so I subset for the taxonomical Class Aves.
+```{r results="hide"}
+diversity<- readRDS("../../RawData/diversity-2018-03-28-02-36-24.rds")
+``` 
+## Exploring the data
+
+### Diversity data
+In the diversity data we have: 
+
+* 32782 empty records for the Class field 
+* 676 record that have "Not assigned" in the Class field
+
+None of this seems to be related to the birds, so I can carry on
+```{r}
+table(diversity$Class)
+```
+
+```{r include=TRUE, message=FALSE, warning=FALSE}
+sum(is.na(diversity$Class)) # this is to check whether there are NAs in the class column 
+sum(diversity$Class== "") # this is to check for empty cells. There are 32782 cell without class
+#summary(diversity$Class) # there are 676 records that don't have "Class" selected but that are recorded as "Not assigned", I checked and none of those could be actually birds
+birds<- subset(diversity,Class =="Aves")
+# this is to find all underscores and replace them with spaces. I need to do this because of differences between this file and the gbd_species was causing issues in the join function later on (the fact that there where records with the under score and some without meant that when i was doing the join later on i was missing some data from the table and therefore ssi was probably calculated on a smaller set of data)
+birds$Taxon_name_entered<-gsub("_", " ",birds$Taxon_name_entered)
+sum(is.na(birds$Best_guess_binomial)) #this check for NAs
+sum(birds$Best_guess_binomial== "") #this check for empty, there are 6135 records that don't have best guess binomial but only have higher level taxonomy (i.e.family or genus only)
+sum(birds$Family== "") # 694 records don't have the family level
+sum(birds$Order =="")
+# 492 records don't have Order level. so to keep in mind in case they can be included in some higher taxonomy level analysis
+# at this point I don't need to worry about the records that don't have Best_guess_binomial and I don't need to remove them as they will be automatically dropped when I run SSI
+```
+
+### Aves data
+There are  411138 Aves in the PREDICTS database
+Best_guess_binomial field:
+
+* 6135 records that don't have best guess binomial but only have higher level taxonomy
+(at this stage i don't need to worry about removing the 6135 records as they will be dropped when i run SSI)
+
+### Merging the datasets (Aves + GBD_species)
+
+Merging the Unique PREDICTS bird species matched to GBD (this is the file that Dan sent me) with the list of species in the diversity data, this will allow to get all GBD species into account and account for the species that could be synonims in our dataset
+
+```{r  results='hide', message=FALSE, warning=FALSE}
+gbd_species <- read.csv("../../RawData/Unique PREDICTS bird species matched to GBD -  16 Feb 2018.csv")
+# this is to replace the underscores with spaces so that the join between birds and gbd_species would not cause some species to go missed for formatting differences
+gbd_species$Taxon_name_entered<- gsub("_", " ",gbd_species$Taxon_name_entered)
+gbd_species$Comment<-NULL
+# gone back to join by the taxon name entered (the best guess binomial was sometimes wrong so could not use it)
+birds<-left_join(birds, gbd_species)
+# this dataset still has all the REMOVE data in it, which i should remove.
+tmp<- subset(birds,GBD.species == "REMOVE" )
+sum(is.na(birds$GBD.species))
+birds<- subset(birds, GBD.species!= "REMOVE")
+
+
+#Need to rename the columns Best guess binomial and GBD species so that then the files can run through the SSi function
+#names(df)[names(df) == 'old.var.name'] <- 'new.var.name'
+#colnames(allspecies)["Best_guess_binomial"]<- "Best_guess_binomial_original"
+# this is how to rename a column
+names(birds)[names(birds)== "Best_guess_binomial"] <-"Best_guess_binomial_original"
+colnames(birds)
+names(birds)[names(birds)== "GBD.species"]<-"Best_guess_binomial"
+colnames(birds)
+```
+### Removing the "Cannot decide" records from the Predominant habitat field
+
+At this point I am checking the "Predominant habitat" field.
+Some records will be under "Cannot decide" and these will need to be removed (or will be erroneously categorized as "converted").
+(Plus some might not have the intact to converted transition so will not be in the SSI calculation.)
+Removing the CANNOT DECIDE brings the records to 249624
+
+```{r results="hide", message=FALSE, warning=FALSE}
+# to check what predominant habitat categories I have in the data set
+  summary(birds$Predominant_habitat)
+# should get rid of the "Cannot decide" as they get categorised as "converted"
+birds<- subset(birds, Predominant_habitat != "Cannot decide")
+summary(birds$Predominant_habitat)
+sum(birds$Predominant_habitat== "")
+```
+  
+
+# Run SSI (Species sensitivity index)
+
+I am now calculating the SSI for 2126 species and plotting the values
+
+```{r, results="hide", warning=FALSE, message=FALSE }
+#create a new column called `LU_nvh`,
+#birds$LU_nvh <-ifelse(birds$Predominant_habitat == "Primary", "intact", "converted")
+birds$LU_nvh <-ifelse(birds$Predominant_habitat %in% c("Primary forest",
+                                                              "Primary non-forest"),
+                          "intact", "converted")
+birds$LU_nvh <-factor(birds$LU_nvh)
+summary(birds$LU_nvh)
+birds$LU_nvh <-relevel(birds$LU_nvh, ref = "intact")
+
+# need to remove the NAs from the birds dataframe or ssi won't run
+birds<- subset(birds, Best_guess_binomial!= "NA")
+# data = dataframe
+# fac = if TRUE, LU_nvh is a factor (this will be true for you)
+# type = occurrence or abundance
+# remove_uncertain = if the name is uncertain, remove it from the analysis
+ssi<- SSI_calc(birds, fac = TRUE, type = "abundance", remove_uncertain = TRUE)
+# ssi <-SSI_calc(birds)
+
+plot_dotchart(ssi, plottitle = "Birds SSI")
+```
+
+```{r message=FALSE, warning=FALSE}
+# ssi %>% 
+#   distinct(Taxon_name_entered) %>% 
+#   nrow() %>%
+#   paste("species have the SSI calculated")
+```
+
+## Trait data
+
+I now load the traits data for all the birds species for which i calculated the SSI
+So I have the trait data for the 2161 species with a value of SSI.
+```{r, message=FALSE, warning=FALSE}
+# loading the trait data and merging it with the birds dataset
+Traitdata <- read.csv("../../RawData/TraitData.csv")
+birdstraitdata <- left_join(ssi,Traitdata, by= c("Species" = "GBD.species"))
+```
+
+However, there are some species for which the abundance is zero both in intact and converted land uses. This means that the SSI for those species is not measuring their response to land use but it could be that they were just absent in both sites. So we need to remove those.
+* At this point I have 2134 species (birdstraitdata dataset)
+```{r warning=FALSE, message=FALSE, results="hide"}
+# to remove the species that have zero abundance at all sites
+datawithouttheabundancezeros<- subset(birdstraitdata, Perc_intact_sites_zero ==100 & Perc_converted_sites_zero == 100)
+summary(datawithouttheabundancezeros)
+datawithouttheabundancezeros$Species #there are 27species that have zero in both landuses
+test<-  subset(birdstraitdata,! Species %in% datawithouttheabundancezeros$Species) 
+birdstraitdata <-test
+summary(birdstraitdata)
+```
+
+
+```{r  }
+# Rename family columns as I have two of them:
+str((birdstraitdata$Family.x))
+str((birdstraitdata$Family.y))
+# there is something wrong in the family columns as they have different number of factor
+table(birdstraitdata$Family.x)
+table(birdstraitdata$Family.y)
+birdstraitdata$Family.x<- as.factor(birdstraitdata$Family.x)
+birdstraitdata$Family.y<- factor(birdstraitdata$Family.y) # this is to drop the levels there are not in this subset 
+# now the two columns have the same number of factors
+# need to check whether the columns match
+all(birdstraitdata$Family.x == birdstraitdata$Family.y) # they do match, do they?
+tmp<-birdstraitdata[(which(birdstraitdata$Family.x != birdstraitdata$Family.y)),] # this actually should check whether they match or not
+
+# I can rename one of the two as family and remove the other one
+birdstraitdata$Family.y[!(birdstraitdata$Family.y %in% birdstraitdata$Family.x)]
+names(birdstraitdata)[names(birdstraitdata)== "Family.x"]<- "Family"
+birdstraitdata$Family.y<- NULL
+colnames(birdstraitdata)
+```
+
+#### Species list
+I need to extract the species list, (the one I will use to get the phylogeny data from the TreeData website) from the dataset. 
+The list I will have to use is the one in the column Jetz.2012.species.name, which is the one recognized in the phylogeny data.
+First up I need to check for duplicates in the Jetz list and remove those as the phylogeny model won't run if it has duplicates in it.
+```{r, message=FALSE, warning=FALSE }
+# at this stage I am extracting the species names that I will use to get the phylogeny from the website.I should extract the species name from the Jetz.2012.species.name (and not the species columns)
+# first i check whether the columns species and the column Jetz.2012.species.name are different, and as they are i then have to extract the Jets columsn which is the one recognized in the phylogeny
+colnames(birdstraitdata)
+tmp<-birdstraitdata[(which(birdstraitdata$Species != birdstraitdata$Jetz.2012.species.name)),]
+# there are 133 species that don't match between the two columns, need to see why and which one of the two to use
+write.csv(tmp, file= "SpeciesNameNoMatching_btwSpecies_Jetz2012speciesname.csv")
+# at this point i need to make sure that there are no duplicates in the Jetz.2012.species.name as the phylogeny analysis won't be able to run
+# this line is to check whether there are duplicates in the Jetz.2012 column
+birdstraitdata[duplicated(birdstraitdata$Jetz.2012.species.name),]
+# there are 9 species that are duplicated and need to be resolved
+# ‘Aethopyga_mystacalis’, ‘Anthreptes_fraseri’, ‘Anthus_richardi’, ‘Camaroptera_brachyura’, ‘Parus_xanthogenys’, ‘Phyllastrephus_cabanisi’, ‘Pycnonotus_barbatus’, ‘Turdus_olivaceus’, ‘Zosterops_maderaspatanus’ 
+
+# after investigation these are the species that need to be removed from the Taxon_name_entered columns: Aethopyga temmincki; Nectarinia fraseri; African Pipit; Grey-backed Camaroptera, Black lored yellow tit, Cabanis Greenbul, Pycnonotus tricolor, Turdus abyssinicus, Kirk's_White-eye
+# this is to delete a row based on a column identity:
+birdstraitdata<- birdstraitdata[!(birdstraitdata$Taxon_name_entered %in% c("Aethopyga temmincki",
+                                                 "Nectarinia fraseri",
+                                                 "African Pipit",
+                                                 "Grey-backed Camaroptera",
+                                                 "Black lored yellow tit",
+                                                 "Cabanis Greenbul",
+                                                 "Pycnonotus tricolor",
+                                                 "Turdus abyssinicus",
+                                                 "Kirk's_White-eye")),]
+
+# this is to check whether there are still duplicates in the Jetz column
+birdstraitdata[duplicated(birdstraitdata$Jetz.2012.species.name),]
+speciesnames <- birdstraitdata [,47]
+speciesnames<- as.data.frame(speciesnames)
+# this is the species list i can use to get the phylogeny data (2125species)
+write.csv(speciesnames, file= "speciesnames.csv")
+
+# birdstraitdata %>% 
+#   distinct(Jetz.2012.species.names) %>% 
+#   nrow()%>%
+#   paste("species have the SSI calculated and traits available")
+```
+
+The file "speciesnames.csv" has the list of species I will use to get the phylogeny data for.
+
+## Exploring trait data and correlations
+
+Here I am just having a look at the correlation between traits. Plotting traits against each other to see which one are highly correlated to then decide which one to use in the analysis or whether they can be grouped/dropped.
+I am using the Kendall method as the variables are not normal distributed.
+```{r, eval=FALSE}
+# Visual inspection of the data normality using Q-Q plots (quantile-quantile plots). Q-Q plot draws the correlation between a given sample and the normal distribution.
+ggqqplot(birdstraitdata$Bill_Width, ylab = "Width")
+ggqqplot(birdstraitdata$Bill_Depth, ylab = "Depth")
+
+ggscatter(birdstraitdata, x = "Bill_Width", y = "Bill_Depth", 
+          add = "reg.line", conf.int = TRUE, 
+      cor.coef = TRUE, cor.method = "kendall",
+       xlab = "Bill Width", ylab = "Bill Depth")
+# Kendall's rank correlation tau
+# -1 indicates a strong negative correlation : this means that every time x increases, y decreases (left panel figure)
+# 0 means that there is no association between the two variables (x and y) (middle panel figure)
+# 1 indicates a strong positive correlation : this means that y increases with x (right panel figure)
+#the result shows that there is a strong positive correlation between the two
+ggscatter(birdstraitdata, x = "Bill_Width", y = "Kipp.s_Distance", 
+          add = "reg.line", conf.int = TRUE, 
+      cor.coef = TRUE, cor.method = "kendall",
+       xlab = "Bill Width", ylab = "Kipp.s Distance")
+ggscatter(birdstraitdata, x = "Bill_Width", y = "Tarsus_Length", 
+          add = "reg.line", conf.int = TRUE, 
+      cor.coef = TRUE, cor.method = "kendall",
+       xlab = "Bill Width", ylab = "Tarsus_Length")
+ggscatter(birdstraitdata, x = "Bill_Width", y = "Wing_Chord", 
+          add = "reg.line", conf.int = TRUE, 
+      cor.coef = TRUE, cor.method = "kendall",
+       xlab = "Bill Width", ylab = "Wing_Chord")
+
+# with "pairs" a matrix of scatter plot is produces
+pairs(birdstraitdata[,36:46])
+
+# pairing ssi with the traits, shows that the distributions are skewed
+# pairs(birdstraitdata[c(8,36:47)])
+```
+
+### Reference
