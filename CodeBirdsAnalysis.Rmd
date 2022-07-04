@@ -29,44 +29,51 @@ source("../../Functions/plot_dotchart.R")
 
 # Preparing the data 
 
-Downloaded the diversity data from the PREDICTS database (diversity-2018-03-28-02-36-24.rds). This will include all the diversity data availalble on the database, but I need to subset to include only birds, so I subset for the taxonomical Class Aves.
+Downloaded the diversity data from the PREDICTS database (diversity-2018-03-28-02-36-24.rds). This will include all the diversity data available on the database, but I need to subset to include only birds, so I subset for the taxonomic Class Aves.
+
 ```{r results="hide"}
-diversity<- readRDS("../../RawData/diversity-2018-03-28-02-36-24.rds")
+diversity<- readRDS("../../RawData/diversity-2022-06-30-02-33-11.rds")
+
 ``` 
 ## Exploring the data
 
 ### Diversity data
+
 In the diversity data we have: 
 
 * 32782 empty records for the Class field 
 * 676 record that have "Not assigned" in the Class field
 
 None of this seems to be related to the birds, so I can carry on
+
 ```{r}
 table(diversity$Class)
 ```
 
 ```{r include=TRUE, message=FALSE, warning=FALSE}
 sum(is.na(diversity$Class)) # this is to check whether there are NAs in the class column 
-sum(diversity$Class== "") # this is to check for empty cells. There are 32782 cell without class
+sum(diversity$Class== "") # this is to check for empty cells. There are 148672 cell without class
 #summary(diversity$Class) # there are 676 records that don't have "Class" selected but that are recorded as "Not assigned", I checked and none of those could be actually birds
+
 birds<- subset(diversity,Class =="Aves")
+nrow(birds)
+
 # this is to find all underscores and replace them with spaces. I need to do this because of differences between this file and the gbd_species was causing issues in the join function later on (the fact that there where records with the under score and some without meant that when i was doing the join later on i was missing some data from the table and therefore ssi was probably calculated on a smaller set of data)
 birds$Taxon_name_entered<-gsub("_", " ",birds$Taxon_name_entered)
 sum(is.na(birds$Best_guess_binomial)) #this check for NAs
-sum(birds$Best_guess_binomial== "") #this check for empty, there are 6135 records that don't have best guess binomial but only have higher level taxonomy (i.e.family or genus only)
-sum(birds$Family== "") # 694 records don't have the family level
+sum(birds$Best_guess_binomial== "")   #this check for empty, there are 7329 records that don't have best guess binomial but only have higher level taxonomy (i.e.family or genus only)
+sum(birds$Family== "") # 718 records don't have the family level
 sum(birds$Order =="")
-# 492 records don't have Order level. so to keep in mind in case they can be included in some higher taxonomy level analysis
+# 504 records don't have Order level. so to keep in mind in case they can be included in some higher taxonomy level analysis
 # at this point I don't need to worry about the records that don't have Best_guess_binomial and I don't need to remove them as they will be automatically dropped when I run SSI
 ```
 
 ### Aves data
-There are  411138 Aves in the PREDICTS database
+There are `r nrow(birds)` Aves in the PREDICTS database
 Best_guess_binomial field:
 
-* 6135 records that don't have best guess binomial but only have higher level taxonomy
-(at this stage i don't need to worry about removing the 6135 records as they will be dropped when i run SSI)
+* `r sum(birds$Best_guess_binomial== "")` records that don't have best guess binomial but only have higher level taxonomy
+(at this stage i don't need to worry about removing the `r sum(birds$Best_guess_binomial== "")` records as they will be dropped when i run SSI)
 
 ### Merging the datasets (Aves + GBD_species)
 
@@ -75,14 +82,16 @@ Merging the Unique PREDICTS bird species matched to GBD (this is the file that D
 ```{r  results='hide', message=FALSE, warning=FALSE}
 gbd_species <- read.csv("../../RawData/Unique PREDICTS bird species matched to GBD -  16 Feb 2018.csv")
 # this is to replace the underscores with spaces so that the join between birds and gbd_species would not cause some species to go missed for formatting differences
-gbd_species$Taxon_name_entered<- gsub("_", " ",gbd_species$Taxon_name_entered)
-gbd_species$Comment<-NULL
+gbd_species$Taxon_name_entered <- gsub("_", " ",gbd_species$Taxon_name_entered)
+gbd_species$Comment <- NULL
 # gone back to join by the taxon name entered (the best guess binomial was sometimes wrong so could not use it)
 birds<-left_join(birds, gbd_species)
 # this dataset still has all the REMOVE data in it, which i should remove.
 tmp<- subset(birds,GBD.species == "REMOVE" )
+
 sum(is.na(birds$GBD.species))
-birds<- subset(birds, GBD.species!= "REMOVE")
+
+birds<- subset(birds, GBD.species != "REMOVE")
 
 
 #Need to rename the columns Best guess binomial and GBD species so that then the files can run through the SSi function
@@ -99,12 +108,12 @@ colnames(birds)
 At this point I am checking the "Predominant habitat" field.
 Some records will be under "Cannot decide" and these will need to be removed (or will be erroneously categorized as "converted").
 (Plus some might not have the intact to converted transition so will not be in the SSI calculation.)
-Removing the CANNOT DECIDE brings the records to 249624
+Removing the CANNOT DECIDE brings the records to `r nrow(birds)`
 
 ```{r results="hide", message=FALSE, warning=FALSE}
 # to check what predominant habitat categories I have in the data set
   summary(birds$Predominant_habitat)
-# should get rid of the "Cannot decide" as they get categorised as "converted"
+
 birds<- subset(birds, Predominant_habitat != "Cannot decide")
 summary(birds$Predominant_habitat)
 sum(birds$Predominant_habitat== "")
@@ -113,7 +122,7 @@ sum(birds$Predominant_habitat== "")
 
 # Run SSI (Species sensitivity index)
 
-I am now calculating the SSI for 2126 species and plotting the values
+I am now calculating the SSI for `r nrow(ssi)` species and plotting the values
 
 ```{r, results="hide", warning=FALSE, message=FALSE }
 #create a new column called `LU_nvh`,
@@ -146,8 +155,8 @@ plot_dotchart(ssi, plottitle = "Birds SSI")
 
 ## Trait data
 
-I now load the traits data for all the birds species for which i calculated the SSI
-So I have the trait data for the 2161 species with a value of SSI.
+I now load the traits data for all the birds species for which i calculated the SSI for
+So I have the trait data for the `r nrow(ssi)` species with a value of SSI.
 ```{r, message=FALSE, warning=FALSE}
 # loading the trait data and merging it with the birds dataset
 Traitdata <- read.csv("../../RawData/TraitData.csv")
@@ -155,7 +164,7 @@ birdstraitdata <- left_join(ssi,Traitdata, by= c("Species" = "GBD.species"))
 ```
 
 However, there are some species for which the abundance is zero both in intact and converted land uses. This means that the SSI for those species is not measuring their response to land use but it could be that they were just absent in both sites. So we need to remove those.
-* At this point I have 2134 species (birdstraitdata dataset)
+* At this point I have `r nrow(birdstraitdata) ` species (birdstraitdata dataset)
 ```{r warning=FALSE, message=FALSE, results="hide"}
 # to remove the species that have zero abundance at all sites
 datawithouttheabundancezeros<- subset(birdstraitdata, Perc_intact_sites_zero ==100 & Perc_converted_sites_zero == 100)
@@ -197,11 +206,11 @@ First up I need to check for duplicates in the Jetz list and remove those as the
 # first i check whether the columns species and the column Jetz.2012.species.name are different, and as they are i then have to extract the Jets columsn which is the one recognized in the phylogeny
 colnames(birdstraitdata)
 tmp<-birdstraitdata[(which(birdstraitdata$Species != birdstraitdata$Jetz.2012.species.name)),]
-# there are 133 species that don't match between the two columns, need to see why and which one of the two to use
+# there are 136 species that don't match between the two columns, need to see why and which one of the two to use
 write.csv(tmp, file= "SpeciesNameNoMatching_btwSpecies_Jetz2012speciesname.csv")
 # at this point i need to make sure that there are no duplicates in the Jetz.2012.species.name as the phylogeny analysis won't be able to run
 # this line is to check whether there are duplicates in the Jetz.2012 column
-birdstraitdata[duplicated(birdstraitdata$Jetz.2012.species.name),]
+tmp<-birdstraitdata[duplicated(birdstraitdata$Jetz.2012.species.name),]
 # there are 9 species that are duplicated and need to be resolved
 # ‘Aethopyga_mystacalis’, ‘Anthreptes_fraseri’, ‘Anthus_richardi’, ‘Camaroptera_brachyura’, ‘Parus_xanthogenys’, ‘Phyllastrephus_cabanisi’, ‘Pycnonotus_barbatus’, ‘Turdus_olivaceus’, ‘Zosterops_maderaspatanus’ 
 
@@ -269,5 +278,38 @@ pairs(birdstraitdata[,36:46])
 # pairing ssi with the traits, shows that the distributions are skewed
 # pairs(birdstraitdata[c(8,36:47)])
 ```
+
+
+
+# linear regression models (SSI~traits)-----------------
+
+
+```{r, eval=FALSE}
+#simple regression model, lm(): uses a solitary independent variable to predict the outcome of a dependent variable
+#in the 'exploring the data' section i found that the bill width has a relationship with the ssi, or in better terms it explains some of the variability of the land use sensitivity of birds species. however even thought there is a significant relationship between the two we have to notice that this has a low explanatory power, as r-sqaured is very close to zero
+#in this section i will explore linear regression model for each traits against the ssi
+# running the models come out that gape width is the best predictor and kipp's distance the worst
+#in general seems that linear model between the ssi and traits is not enough to explain the relation (is this true?)
+
+# BILL WIDTH
+model1 <- lm(est ~ log(Bill_Width), birdstraitdata)  # Multiple R-squared:  0.01219, Coefficients:
+# (Intercept)  log(Bill_Width)  
+#  0.3359          -0.3700
+# model1<- lm(est~ log(Bill_Width), birdstraitdata, weight=birdstraitdata$se) 
+summary(model1)
+model1 #this gives you the coeff
+#to set your graphics window to show four plots at once, in a layout with 2 rows and 2 columns
+par(mfrow=c(2,2))
+plot(model1)
+fitted(model1) # gives you the fitted values
+coef(model1) # to extract the coefficient of the model
+residuals(model1)
+names((model1)) # names the components of a linear fit
+
+```
+
+
+
+
 
 ### Reference
